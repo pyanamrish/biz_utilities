@@ -3,7 +3,7 @@ from utilities.product_details import ProductDetailsGenerator
 from utilities.image_enhancer import ImageEnhancer
 from utils.formatters import display_product_content, format_error_message
 from utils.image_utils import display_enhanced_image, validate_image_upload
-from prompts.image_enhancer_prompts import SHOT_ANGLES, BACKGROUNDS, CATEGORIES, ASPECT_RATIOS, OUTPUT_FORMATS
+from prompts.image_enhancer_prompts import SHOT_ANGLES, BACKGROUNDS, CATEGORIES, ASPECT_RATIOS, OUTPUT_FORMATS, CATEGORY_SUGGESTIONS
 import os
 
 # Page configuration
@@ -142,13 +142,21 @@ with st.sidebar:
     if 'selected_utility' not in st.session_state:
         st.session_state.selected_utility = "Product Details Generator"
     
+    # Initialize history if not exists
+    if 'image_history' not in st.session_state:
+        st.session_state.image_history = []
+    
     # Navigation buttons with custom styling
-    if st.button("Zyl - Narrato", key="nav_product", use_container_width=True):
+    if st.button("📝 Zyl - Narrato", key="nav_product", use_container_width=True):
         st.session_state.selected_utility = "Product Details Generator"
         st.rerun()
     
-    if st.button("Zyl - Pixly", key="nav_image", use_container_width=True):
+    if st.button("🖼️ Zyl - Pixly", key="nav_image", use_container_width=True):
         st.session_state.selected_utility = "Product Image Enhancer"
+        st.rerun()
+        
+    if st.button("📚 History", key="nav_history", use_container_width=True):
+        st.session_state.selected_utility = "History"
         st.rerun()
     
     utility = st.session_state.selected_utility
@@ -313,25 +321,46 @@ elif utility == "Product Image Enhancer":
             st.image(uploaded_file, caption="Original Image", use_container_width=True)
     
     with col2:
+        # Category-specific prompt suggestions (outside form for interactivity)
+        shot_angle = st.selectbox(
+            "Shot Angle",
+            SHOT_ANGLES,
+            help="Select the desired camera angle"
+        )
+        
+        background = st.selectbox(
+            "Background Style",
+            BACKGROUNDS,
+            help="Choose the background style"
+        )
+        
+        category = st.selectbox(
+            "Product Category",
+            CATEGORIES,
+            help="Select your product category"
+        )
+        
+        # Initialize suggestion state
+        if 'selected_suggestion' not in st.session_state:
+            st.session_state.selected_suggestion = ""
+            
+        # Show category suggestions
+        if category in CATEGORY_SUGGESTIONS:
+            st.markdown("**💡 Prompt Suggestions for " + category + ":**")
+            
+            suggestions = CATEGORY_SUGGESTIONS[category]
+            for i, suggestion in enumerate(suggestions):
+                # Create a shorter display text for the button
+                button_text = suggestion[:60] + "..." if len(suggestion) > 60 else suggestion
+                
+                if st.button(f"📝 {button_text}", key=f"suggestion_{category}_{i}", use_container_width=True):
+                    st.session_state.selected_suggestion = suggestion
+                    st.rerun()
+            
+            st.markdown("*Click any suggestion above to prefill the Additional Instructions field*")
+            st.markdown("---")
+        
         with st.form("image_enhancement_form"):
-            shot_angle = st.selectbox(
-                "Shot Angle",
-                SHOT_ANGLES,
-                help="Select the desired camera angle"
-            )
-            
-            background = st.selectbox(
-                "Background Style",
-                BACKGROUNDS,
-                help="Choose the background style"
-            )
-            
-            category = st.selectbox(
-                "Product Category",
-                CATEGORIES,
-                help="Select your product category"
-            )
-            
             aspect_ratio = st.selectbox(
                 "Output Aspect Ratio",
                 ASPECT_RATIOS,
@@ -344,8 +373,12 @@ elif utility == "Product Image Enhancer":
                 help="Choose the output image format"
             )
             
+            # Use the selected suggestion as default value
+            default_instructions = st.session_state.selected_suggestion if st.session_state.selected_suggestion else ""
+            
             additional_instructions = st.text_area(
                 "Additional Instructions (Optional)",
+                value=default_instructions,
                 placeholder="e.g., Make colors more vibrant, add subtle shadows",
                 help="Any specific requirements for the enhancement"
             )
@@ -422,6 +455,45 @@ elif utility == "Product Image Enhancer":
                         custom_prompt=custom_prompt if show_prompt and custom_prompt else None
                     )
                     
+                    # Add to history
+                    import base64
+                    from datetime import datetime
+                    import requests
+                    
+                    # Convert images to base64 for storage
+                    original_b64 = base64.b64encode(image_bytes).decode()
+                    
+                    # Handle enhanced image - it's a dict with 'url' key
+                    if isinstance(enhanced_image, dict) and 'url' in enhanced_image:
+                        response = requests.get(enhanced_image['url'])
+                        enhanced_bytes = response.content
+                    elif isinstance(enhanced_image, bytes):
+                        enhanced_bytes = enhanced_image
+                    else:
+                        raise Exception("Unexpected enhanced image format")
+                    
+                    enhanced_b64 = base64.b64encode(enhanced_bytes).decode()
+                    
+                    history_entry = {
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'original_image': original_b64,
+                        'enhanced_image': enhanced_b64,
+                        'filename': uploaded_file.name,
+                        'shot_angle': shot_angle,
+                        'background': background,
+                        'category': category,
+                        'aspect_ratio': aspect_ratio,
+                        'output_format': output_format,
+                        'additional_instructions': additional_instructions,
+                        'custom_prompt': custom_prompt if show_prompt and custom_prompt else None
+                    }
+                    
+                    st.session_state.image_history.append(history_entry)
+                    
+                    # Keep only last 10 entries to prevent memory issues
+                    if len(st.session_state.image_history) > 10:
+                        st.session_state.image_history = st.session_state.image_history[-10:]
+                    
                     display_enhanced_image(enhanced_image)
                     
                 except Exception as e:
@@ -429,6 +501,93 @@ elif utility == "Product Image Enhancer":
     
     elif enhance_button and not uploaded_file:
         st.error("Please upload an image first")
+
+elif utility == "History":
+    st.markdown("## 📚 Image Enhancement History")
+    st.markdown("View your previous image enhancements and download results")
+    
+    if not st.session_state.image_history:
+        st.info("No image enhancement history found. Generate some images first!")
+    else:
+        st.markdown(f"**Total Enhancements: {len(st.session_state.image_history)}**")
+        st.markdown("---")
+        
+        # Display history in reverse order (newest first)
+        for i, entry in enumerate(reversed(st.session_state.image_history)):
+            with st.container():
+                st.markdown(f"### Enhancement #{len(st.session_state.image_history) - i}")
+                st.markdown(f"**Created:** {entry['timestamp']} | **Original File:** {entry['filename']}")
+                
+                col1, col2, col3 = st.columns([1, 1, 1])
+                
+                with col1:
+                    st.markdown("**Original Image**")
+                    try:
+                        import base64
+                        original_bytes = base64.b64decode(entry['original_image'])
+                        st.image(original_bytes, use_container_width=True)
+                        
+                        # Download button for original
+                        st.download_button(
+                            label="⬇️ Download Original",
+                            data=original_bytes,
+                            file_name=f"original_{entry['filename']}",
+                            mime=f"image/{entry['output_format']}"
+                        )
+                    except Exception as e:
+                        st.error("Error loading original image")
+                
+                with col2:
+                    st.markdown("**Enhanced Image**")
+                    try:
+                        enhanced_bytes = base64.b64decode(entry['enhanced_image'])
+                        st.image(enhanced_bytes, use_container_width=True)
+                        
+                        # Download button for enhanced image
+                        st.download_button(
+                            label="⬇️ Download Enhanced",
+                            data=enhanced_bytes,
+                            file_name=f"enhanced_{entry['filename'].split('.')[0]}.{entry['output_format']}",
+                            mime=f"image/{entry['output_format']}"
+                        )
+                    except Exception as e:
+                        st.error("Error loading enhanced image")
+                
+                with col3:
+                    st.markdown("**Enhancement Settings**")
+                    st.markdown(f"**Category:** {entry['category']}")
+                    st.markdown(f"**Shot Angle:** {entry['shot_angle']}")
+                    st.markdown(f"**Background:** {entry['background']}")
+                    st.markdown(f"**Aspect Ratio:** {entry['aspect_ratio']}")
+                    st.markdown(f"**Format:** {entry['output_format']}")
+                    
+                    if entry['additional_instructions']:
+                        st.markdown("**Additional Instructions:**")
+                        st.text_area(
+                            "Prompt used:",
+                            value=entry['additional_instructions'],
+                            height=100,
+                            disabled=True,
+                            key=f"history_prompt_{i}"
+                        )
+                    
+                    if entry['custom_prompt']:
+                        st.markdown("**Custom Prompt Used:**")
+                        st.text_area(
+                            "Custom prompt:",
+                            value=entry['custom_prompt'],
+                            height=150,
+                            disabled=True,
+                            key=f"history_custom_prompt_{i}"
+                        )
+                
+                st.markdown("---")
+        
+        # Clear history button
+        if st.button("🗑️ Clear All History", type="secondary"):
+            st.session_state.image_history = []
+            st.success("History cleared!")
+            st.rerun()
 
 # Footer
 st.markdown("---")
